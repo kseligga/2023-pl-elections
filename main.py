@@ -1,3 +1,4 @@
+import copy
 import math
 import pandas as pd
 import numpy as np
@@ -42,6 +43,30 @@ for partia in parties:
     # PARTIA_var - wariancja probkowa dla partii pomnozona przez N (dla dodania wagi sondazu)
     df[partia + '_var'] = df.apply(lambda x: x[partia + '_real']*(1-x[partia+'_real']) if x[partia]!='ND' else 0, axis=1)
 
+suma_glosow=0
+sumy_partii=[['pis','ko','psl','konf','lew'], [0.0]*5]
+
+
+
+# symboliczne dodanie do predykcji z ewybory wyniku z poprzednich wyborow, zeby nie bylo remisow ktore psuja przeliczanie
+for partia in sumy_partii[0]:
+    pred_23[partia] = pred_23[partia]*0.99 + res_19[partia]*0.01
+
+for (_, okreg) in pred_23.iterrows():
+    for i in range(len(sumy_partii[0])):
+        sumy_partii[1][i] += okreg[str(sumy_partii[0][i])] / 100 * okreg['populacja'] * okreg['frekwencja']
+    suma_glosow+=okreg['populacja']*okreg['frekwencja']
+
+
+poparcie_zokregow = []
+for i in range (len(sumy_partii[0])):
+    poparcie_zokregow.append(sumy_partii[1][i]/suma_glosow)
+
+pred_23_origin = copy.deepcopy(pred_23)
+
+print(pred_23_origin)
+print(sumy_partii)
+
 srednie=[]
 odchylenia=[]
 
@@ -59,6 +84,24 @@ for partia in parties:
 
 # normalizacja
 pl_23 = [x/sumka for x in srednie]
+
+# edytujemy poparcie w okregach, tak zeby zsumowalo sie do sredniej ogolnopolskiej z sondazy
+
+def przelicz_okregi(srednie):
+    tmppred_23 = copy.deepcopy(pred_23_origin)
+
+    diff = []
+    for i in range(len(poparcie_zokregow)):
+        diff.append(srednie[i] / poparcie_zokregow[i]/100)
+
+    i = 0
+
+    for partia in sumy_partii[0]:
+        tmppred_23[partia] = tmppred_23.apply(lambda x: x[partia] * diff[i], axis=1)
+        i += 1
+    return tmppred_23
+
+
 
 def dhondt(mandaty, lista_wyniki):
     '''
@@ -80,34 +123,14 @@ def dhondt(mandaty, lista_wyniki):
     return lista_mandaty
 
 
-def zwroc_mandaty(mandaty_okr, okreg_19, pl_23, okreg23):
-    '''
-    Wylicza poparcie dla konkretnych okregow i zwraca przydzial mandatow
-    :param mandaty_okr: liczba mandatow
-    :param okreg_19: lista wynikow w okregu w 2019
-    :param pl_23: lista przewidzianych wynikow ogolnopolskich w 2023
-    :param okreg23: lista przewidzianych wynikow w okregu w 2023
-    '''
-    change = [res23 / res19 for res23, res19 in zip(pl_23, pl_19)]
-
-    # waga, z jaka uwzgledniony jest wynik z pliku "predykcja_okregi.csv" - reszta to wyliczenie na podstawie 2019
-    waga_predykcji = 0.3
-
-    okreg_23 = [(chng * okr19)*(1-waga_predykcji) + waga_predykcji*okr23 if chng>0 else 0.0 for chng, okr19, okr23 in zip(change, okreg_19, okreg23)]
-
-    for i in range(len(okreg_23)):
-        f.write(',' + str(round(okreg_23[i],3)))
-
-    return dhondt(mandaty_okr, okreg_23)
+print(pl_23)
+print(odchylenia)
 
 
-### SYMULACJE ###
-
-# symulacje wyborow z uwzglednionymi odchyleniami w wynikach komitetow
-for sym in range(10):
-
-    if sym==0: # symulacja nr 0 to symulacja dla wynikow rownym wyliczonym srednim z sondazy
+for sym in range(10000):
+    if sym == 0:  # symulacja nr 0 to symulacja dla wynikow rownym wyliczonym srednim z sondazy
         normalized_pl = [100 * sr for sr in pl_23]
+        #print("kotek")
     else:
         # losowanko wynikow zgodnie z wyliczonymi srednimi i mozliwymi odchyleniami
         randomized_pl = [abs(np.random.normal(sr, sd)) for sr, sd in zip(pl_23, odchylenia)]
@@ -117,28 +140,25 @@ for sym in range(10):
     g.write(str(sym))
 
     for i in range(len(normalized_pl)):
-        g.write(','+str(round(normalized_pl[i],3)))
+        g.write(',' + str(round(normalized_pl[i], 3)))
 
         # bierzemy pod uwage prog wyborczy
-        if normalized_pl[i] < 5 or ((i==1 or i==2) and normalized_pl[i]<8):
+        if normalized_pl[i] < 5 or ((i == 1 or i == 2) and normalized_pl[i] < 8):
             z_progiem[i] = 0
     g.write('\n')
 
     # jedna symulacja:
-    for (index, okreg19),(_, okreg23) in zip(res_19.iterrows(), pred_23.iterrows()):
-        okreg = okreg19
-        #okr = (okreg19['num'], okreg19['nazwa'],)
-        f.write(str(okreg19['num']) + ',' + okreg19['nazwa'])
-        h.write(str(okreg19['num']) + ',' + okreg19['nazwa'])
+    wyniki = przelicz_okregi(z_progiem)
+    for (_, okreg) in wyniki.iterrows():
+        f.write(str(okreg['num']) + ',' + okreg['nazwa'])
+        h.write(str(okreg['num']) + ',' + okreg['nazwa'])
 
-        mandaty_okr = zwroc_mandaty(okreg19['mandaty'],
-                                    [okreg19['pis'], okreg19['ko'], okreg19['psl'], okreg19['konf'], okreg19['lew']],
-                                    z_progiem,
-                                    [okreg23['pis'], okreg23['ko'], okreg23['psl'], okreg23['konf'],okreg23['lew']])
+        for partia in sumy_partii[0]:
+            f.write(',' + str(round(okreg[partia], 3)))
 
-        if sum(mandaty_okr) != okreg19['mandaty']: print('ZESRALO SIE!!!!!') # zle policzylo cos, tzw dupa debugging
+        mandaty_okr = dhondt(okreg['mandaty'], [okreg['pis'], okreg['ko'], okreg['psl'], okreg['konf'], okreg['lew']])
+        if sum(mandaty_okr) != okreg['mandaty']: print('ZESRALO SIE!!!!!')  # zle policzylo cos, tzw dupa debugging
         for i in range(len(mandaty_okr)):
             h.write(',' + str(mandaty_okr[i]))
-
         h.write(',' + str(sym) + '\n')
         f.write(',' + str(sym) + '\n')
